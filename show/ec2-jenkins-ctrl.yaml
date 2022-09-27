@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: Create AMI from EC2 instance
+Parameters:
+  ImageId:
+    Description: Image ID for base EC2 instance
+    Type: AWS::EC2::Image::Id
+    Default: ami-0ea0f26a6d50850c5
+  InstanceType:
+    Description: Instance type to launch EC2 instances
+    Type: String
+    Default: t2.micro
+Resources:
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access via port 22
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+  WebSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable HTTP access via user defined port
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: tcp
+        ToPort: 80
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      SecurityGroups:
+      - !Ref SSHSecurityGroup
+      - !Ref WebSecurityGroup
+      UserData:
+        "Fn::Base64": !Sub |
+          #!/bin/bash -x
+          yum update -y
+          touch /home/ec2-user/install.log
+          echo "Installing java-11-openjdk: " >> /home/ec2-user/install.log
+          amazon-linux-extras install java-openjdk11 >> /home/ec2-user/install.log
+          echo "END Java Installation" >> /home/ec2-user/install.log
+          echo "=====================" >> /home/ec2-user/install.log
+          echo "" >> /home/ec2-user/install.log
+
+          echo "Installing Jenkins" >> /home/ec2-user/install.log
+          wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo >> /home/ec2-user/install.log
+          rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key >> /home/ec2-user/install.log
+          yum install jenkins-2.361.2 -y >> /home/ec2-user/install.log
+          sudo systemctl enable jenkins >> /home/ec2-user/install.log
+          sudo systemctl start jenkins >> /home/ec2-user/install.log
+          echo "END Jenkins Installation" >> /home/ec2-user/install.log
+          echo "=====================" >> /home/ec2-user/install.log
+          echo "" >> /home/ec2-user/install.log
+
+          yum install git -y
+          yum install maven -y
+
+          iptables -A PREROUTING -t nat -i eth0 -p tcp --dport 80 -j REDIRECT --to-port 8080 >> /home/ec2-user/install.log
+          iptables-save > /etc/iptables.conf
+          echo "iptables-restore < /etc/iptables.conf" >> /etc/rc.local
+          chmod +x /etc/rc.d/rc.local
+
+          /opt/aws/bin/cfn-signal \
+            -e $? \
+            --stack ${AWS::StackName} \
+            --region ${AWS::Region} \
+            --resource AMICreate
+          chown ec2-user:ec2-user /home/ec2-user/install.log
+      KeyName: "jenkins-kp2"
+      Tags:
+        -
+          Key: Name
+          Value: Jenkins AMI
